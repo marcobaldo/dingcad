@@ -22,7 +22,8 @@
 #include <vector>
 #include <utility>
 
-extern "C" {
+extern "C"
+{
 #include "quickjs.h"
 }
 
@@ -30,14 +31,15 @@ extern "C" {
 #include "manifold/polygon.h"
 #include "js_bindings.h"
 
-namespace {
-const Color kBaseColor = {210, 210, 220, 255};
-const char *kBrandText = "dingcad";
-constexpr float kBrandFontSize = 28.0f;
-constexpr float kSceneScale = 0.1f;  // convert mm scene units to renderer units
+namespace
+{
+  const Color kBaseColor = {210, 210, 220, 255};
+  const char *kBrandText = "dingcad";
+  constexpr float kBrandFontSize = 28.0f;
+  constexpr float kSceneScale = 0.1f; // convert mm scene units to renderer units
 
-// GLSL 330 core (desktop). Uses raylib's default attribute/uniform names.
-const char* kOutlineVS = R"glsl(
+  // GLSL 330 core (desktop). Uses raylib's default attribute/uniform names.
+  const char *kOutlineVS = R"glsl(
 #version 330
 
 in vec3 vertexPosition;
@@ -55,7 +57,7 @@ void main()
 }
 )glsl";
 
-const char* kOutlineFS = R"glsl(
+  const char *kOutlineFS = R"glsl(
 #version 330
 
 out vec4 finalColor;
@@ -69,8 +71,8 @@ void main()
 }
 )glsl";
 
-// Toon (cel) shading — lit 3D pass
-const char* kToonVS = R"glsl(
+  // Toon (cel) shading — lit 3D pass
+  const char *kToonVS = R"glsl(
 #version 330
 in vec3 vertexPosition;
 in vec3 vertexNormal;
@@ -89,7 +91,7 @@ void main() {
 }
 )glsl";
 
-const char* kToonFS = R"glsl(
+  const char *kToonFS = R"glsl(
 #version 330
 in vec3 vNvs;
 in vec3 vVdir;
@@ -129,8 +131,8 @@ void main() {
 }
 )glsl";
 
-// Normal+Depth G-buffer — for screen-space edges
-const char* kNormalDepthVS = R"glsl(
+  // Normal+Depth G-buffer — for screen-space edges
+  const char *kNormalDepthVS = R"glsl(
 #version 330
 in vec3 vertexPosition;
 in vec3 vertexNormal;
@@ -148,7 +150,7 @@ void main() {
 }
 )glsl";
 
-const char* kNormalDepthFS = R"glsl(
+  const char *kNormalDepthFS = R"glsl(
 #version 330
 in vec3 nVS;
 in float depthLin;
@@ -161,8 +163,8 @@ void main() {
 }
 )glsl";
 
-// Fullscreen composite — ink from normal/depth discontinuities
-const char* kEdgeQuadVS = R"glsl(
+  // Fullscreen composite — ink from normal/depth discontinuities
+  const char *kEdgeQuadVS = R"glsl(
 #version 330
 in vec3 vertexPosition;
 in vec2 vertexTexCoord;
@@ -174,7 +176,7 @@ void main() {
 }
 )glsl";
 
-const char* kEdgeFS = R"glsl(
+  const char *kEdgeFS = R"glsl(
 #version 330
 in vec2 uv;
 out vec4 finalColor;
@@ -216,514 +218,578 @@ void main(){
 }
 )glsl";
 
-struct Vec3f {
-  float x;
-  float y;
-  float z;
-};
-
-struct ModuleLoaderData {
-  std::filesystem::path baseDir;
-  std::set<std::filesystem::path> dependencies;
-};
-
-ModuleLoaderData g_module_loader_data;
-
-struct WatchedFile {
-  std::optional<std::filesystem::file_time_type> timestamp;
-};
-
-Vec3f FetchVertex(const manifold::MeshGL &mesh, uint32_t index) {
-  const size_t offset = static_cast<size_t>(index) * mesh.numProp;
-  return {
-      static_cast<float>(mesh.vertProperties[offset + 0]),
-      static_cast<float>(mesh.vertProperties[offset + 1]),
-      static_cast<float>(mesh.vertProperties[offset + 2])
+  struct Vec3f
+  {
+    float x;
+    float y;
+    float z;
   };
-}
 
-Vec3f Subtract(const Vec3f &a, const Vec3f &b) {
-  return {a.x - b.x, a.y - b.y, a.z - b.z};
-}
+  struct ModuleLoaderData
+  {
+    std::filesystem::path baseDir;
+    std::set<std::filesystem::path> dependencies;
+  };
 
-Vec3f Cross(const Vec3f &a, const Vec3f &b) {
-  return {a.y * b.z - a.z * b.y,
-          a.z * b.x - a.x * b.z,
-          a.x * b.y - a.y * b.x};
-}
+  ModuleLoaderData g_module_loader_data;
 
-Vec3f Normalize(const Vec3f &v) {
-  const float lenSq = v.x * v.x + v.y * v.y + v.z * v.z;
-  if (lenSq <= 0.0f) return {0.0f, 0.0f, 0.0f};
-  const float invLen = 1.0f / std::sqrt(lenSq);
-  return {v.x * invLen, v.y * invLen, v.z * invLen};
-}
+  struct WatchedFile
+  {
+    std::optional<std::filesystem::file_time_type> timestamp;
+  };
 
-bool WriteMeshAsBinaryStl(const manifold::MeshGL &mesh,
-                          const std::filesystem::path &path,
-                          std::string &error) {
-  const uint32_t triCount = static_cast<uint32_t>(mesh.NumTri());
-  if (triCount == 0) {
-    error = "Export failed: mesh is empty";
-    return false;
+  Vec3f FetchVertex(const manifold::MeshGL &mesh, uint32_t index)
+  {
+    const size_t offset = static_cast<size_t>(index) * mesh.numProp;
+    return {
+        static_cast<float>(mesh.vertProperties[offset + 0]),
+        static_cast<float>(mesh.vertProperties[offset + 1]),
+        static_cast<float>(mesh.vertProperties[offset + 2])};
   }
 
-  std::ofstream out(path, std::ios::binary);
-  if (!out) {
-    error = "Export failed: cannot open " + path.string();
-    return false;
+  Vec3f Subtract(const Vec3f &a, const Vec3f &b)
+  {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
   }
 
-  std::array<char, 80> header{};
-  constexpr const char kHeader[] = "dingcad export";
-  std::memcpy(header.data(), kHeader, std::min(header.size(), std::strlen(kHeader)));
-  out.write(header.data(), header.size());
-  out.write(reinterpret_cast<const char *>(&triCount), sizeof(uint32_t));
-
-  for (uint32_t tri = 0; tri < triCount; ++tri) {
-    const uint32_t i0 = mesh.triVerts[tri * 3 + 0];
-    const uint32_t i1 = mesh.triVerts[tri * 3 + 1];
-    const uint32_t i2 = mesh.triVerts[tri * 3 + 2];
-
-    const Vec3f v0 = FetchVertex(mesh, i0);
-    const Vec3f v1 = FetchVertex(mesh, i1);
-    const Vec3f v2 = FetchVertex(mesh, i2);
-
-    const Vec3f normal = Normalize(Cross(Subtract(v1, v0), Subtract(v2, v0)));
-
-    out.write(reinterpret_cast<const char *>(&normal), sizeof(Vec3f));
-    out.write(reinterpret_cast<const char *>(&v0), sizeof(Vec3f));
-    out.write(reinterpret_cast<const char *>(&v1), sizeof(Vec3f));
-    out.write(reinterpret_cast<const char *>(&v2), sizeof(Vec3f));
-    const uint16_t attr = 0;
-    out.write(reinterpret_cast<const char *>(&attr), sizeof(uint16_t));
+  Vec3f Cross(const Vec3f &a, const Vec3f &b)
+  {
+    return {a.y * b.z - a.z * b.y,
+            a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x};
   }
 
-  if (!out) {
-    error = "Export failed: write error";
-    return false;
+  Vec3f Normalize(const Vec3f &v)
+  {
+    const float lenSq = v.x * v.x + v.y * v.y + v.z * v.z;
+    if (lenSq <= 0.0f)
+      return {0.0f, 0.0f, 0.0f};
+    const float invLen = 1.0f / std::sqrt(lenSq);
+    return {v.x * invLen, v.y * invLen, v.z * invLen};
   }
 
-  return true;
-}
+  bool WriteMeshAsBinaryStl(const manifold::MeshGL &mesh,
+                            const std::filesystem::path &path,
+                            std::string &error)
+  {
+    const uint32_t triCount = static_cast<uint32_t>(mesh.NumTri());
+    if (triCount == 0)
+    {
+      error = "Export failed: mesh is empty";
+      return false;
+    }
 
-void DestroyModel(Model &model) {
-  if (model.meshes != nullptr || model.materials != nullptr) {
-    UnloadModel(model);
+    std::ofstream out(path, std::ios::binary);
+    if (!out)
+    {
+      error = "Export failed: cannot open " + path.string();
+      return false;
+    }
+
+    std::array<char, 80> header{};
+    constexpr const char kHeader[] = "dingcad export";
+    std::memcpy(header.data(), kHeader, std::min(header.size(), std::strlen(kHeader)));
+    out.write(header.data(), header.size());
+    out.write(reinterpret_cast<const char *>(&triCount), sizeof(uint32_t));
+
+    for (uint32_t tri = 0; tri < triCount; ++tri)
+    {
+      const uint32_t i0 = mesh.triVerts[tri * 3 + 0];
+      const uint32_t i1 = mesh.triVerts[tri * 3 + 1];
+      const uint32_t i2 = mesh.triVerts[tri * 3 + 2];
+
+      const Vec3f v0 = FetchVertex(mesh, i0);
+      const Vec3f v1 = FetchVertex(mesh, i1);
+      const Vec3f v2 = FetchVertex(mesh, i2);
+
+      const Vec3f normal = Normalize(Cross(Subtract(v1, v0), Subtract(v2, v0)));
+
+      out.write(reinterpret_cast<const char *>(&normal), sizeof(Vec3f));
+      out.write(reinterpret_cast<const char *>(&v0), sizeof(Vec3f));
+      out.write(reinterpret_cast<const char *>(&v1), sizeof(Vec3f));
+      out.write(reinterpret_cast<const char *>(&v2), sizeof(Vec3f));
+      const uint16_t attr = 0;
+      out.write(reinterpret_cast<const char *>(&attr), sizeof(uint16_t));
+    }
+
+    if (!out)
+    {
+      error = "Export failed: write error";
+      return false;
+    }
+
+    return true;
   }
-  model = Model{};
-}
 
-Model CreateRaylibModelFrom(const manifold::MeshGL &meshGL) {
-  Model model = {0};
-  const int vertexCount = meshGL.NumVert();
-  const int triangleCount = meshGL.NumTri();
+  void DestroyModel(Model &model)
+  {
+    if (model.meshes != nullptr || model.materials != nullptr)
+    {
+      UnloadModel(model);
+    }
+    model = Model{};
+  }
 
-  if (vertexCount <= 0 || triangleCount <= 0) {
+  Model CreateRaylibModelFrom(const manifold::MeshGL &meshGL)
+  {
+    Model model = {0};
+    const int vertexCount = meshGL.NumVert();
+    const int triangleCount = meshGL.NumTri();
+
+    if (vertexCount <= 0 || triangleCount <= 0)
+    {
+      return model;
+    }
+
+    const int stride = meshGL.numProp;
+    std::vector<Vector3> positions(vertexCount);
+    for (int v = 0; v < vertexCount; ++v)
+    {
+      const int base = v * stride;
+      // Convert from the scene's Z-up coordinates to raylib's Y-up system.
+      const float cadX = meshGL.vertProperties[base + 0] * kSceneScale;
+      const float cadY = meshGL.vertProperties[base + 1] * kSceneScale;
+      const float cadZ = meshGL.vertProperties[base + 2] * kSceneScale;
+      positions[v] = {cadX, cadZ, -cadY};
+    }
+
+    std::vector<Vector3> accum(vertexCount, {0.0f, 0.0f, 0.0f});
+    for (int tri = 0; tri < triangleCount; ++tri)
+    {
+      const int i0 = meshGL.triVerts[tri * 3 + 0];
+      const int i1 = meshGL.triVerts[tri * 3 + 1];
+      const int i2 = meshGL.triVerts[tri * 3 + 2];
+
+      const Vector3 p0 = positions[i0];
+      const Vector3 p1 = positions[i1];
+      const Vector3 p2 = positions[i2];
+
+      const Vector3 u = {p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
+      const Vector3 v = {p2.x - p0.x, p2.y - p0.y, p2.z - p0.z};
+      const Vector3 n = {u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z,
+                         u.x * v.y - u.y * v.x};
+
+      accum[i0].x += n.x;
+      accum[i0].y += n.y;
+      accum[i0].z += n.z;
+      accum[i1].x += n.x;
+      accum[i1].y += n.y;
+      accum[i1].z += n.z;
+      accum[i2].x += n.x;
+      accum[i2].y += n.y;
+      accum[i2].z += n.z;
+    }
+
+    std::vector<Vector3> normals(vertexCount);
+    std::vector<Color> colors(vertexCount);
+    const Vector3 lightDir = Vector3Normalize({0.45f, 0.85f, 0.35f});
+    for (int v = 0; v < vertexCount; ++v)
+    {
+      const Vector3 n = accum[v];
+      const float length = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+
+      Vector3 normal = {0.0f, 1.0f, 0.0f};
+      if (length > 0.0f)
+      {
+        normal = {n.x / length, n.y / length, n.z / length};
+      }
+      normals[v] = normal;
+
+      float intensity = Vector3DotProduct(normal, lightDir);
+      intensity = Clamp(intensity, 0.0f, 1.0f);
+      constexpr int toonSteps = 3;
+      int level = static_cast<int>(std::floor(intensity * toonSteps));
+      if (level >= toonSteps)
+        level = toonSteps - 1;
+      const float toon = (toonSteps > 1)
+                             ? static_cast<float>(level) /
+                                   static_cast<float>(toonSteps - 1)
+                             : intensity;
+      const float ambient = 0.3f;
+      const float diffuse = 0.7f;
+      float finalIntensity = Clamp(ambient + diffuse * toon, 0.0f, 1.0f);
+
+      const Color base = kBaseColor;
+      Color color = {0};
+      color.r = static_cast<unsigned char>(
+          Clamp(base.r * finalIntensity, 0.0f, 255.0f));
+      color.g = static_cast<unsigned char>(
+          Clamp(base.g * finalIntensity, 0.0f, 255.0f));
+      color.b = static_cast<unsigned char>(
+          Clamp(base.b * finalIntensity, 0.0f, 255.0f));
+      color.a = base.a;
+      colors[v] = color;
+    }
+
+    constexpr int kMaxVerticesPerMesh = std::numeric_limits<unsigned short>::max();
+    std::vector<int> remap(vertexCount, 0);
+    std::vector<int> remapMarker(vertexCount, 0);
+    int chunkToken = 1;
+
+    std::vector<Mesh> meshes;
+    meshes.reserve(
+        static_cast<size_t>(triangleCount) / kMaxVerticesPerMesh + 1);
+
+    int triIndex = 0;
+    while (triIndex < triangleCount)
+    {
+      const int currentToken = chunkToken++;
+      int chunkVertexCount = 0;
+      std::vector<Vector3> chunkPositions;
+      std::vector<Vector3> chunkNormals;
+      std::vector<Color> chunkColors;
+      std::vector<unsigned short> chunkIndices;
+
+      chunkPositions.reserve(std::min(kMaxVerticesPerMesh, vertexCount));
+      chunkNormals.reserve(std::min(kMaxVerticesPerMesh, vertexCount));
+      chunkColors.reserve(std::min(kMaxVerticesPerMesh, vertexCount));
+      chunkIndices.reserve(std::min(kMaxVerticesPerMesh, vertexCount) * 3);
+
+      while (triIndex < triangleCount)
+      {
+        const int indices[3] = {
+            static_cast<int>(meshGL.triVerts[triIndex * 3 + 0]),
+            static_cast<int>(meshGL.triVerts[triIndex * 3 + 1]),
+            static_cast<int>(meshGL.triVerts[triIndex * 3 + 2])};
+
+        int needed = 0;
+        for (int j = 0; j < 3; ++j)
+        {
+          if (remapMarker[indices[j]] != currentToken)
+          {
+            ++needed;
+          }
+        }
+
+        if (chunkVertexCount + needed > kMaxVerticesPerMesh)
+        {
+          break;
+        }
+
+        for (int j = 0; j < 3; ++j)
+        {
+          const int original = indices[j];
+          if (remapMarker[original] != currentToken)
+          {
+            remapMarker[original] = currentToken;
+            remap[original] = chunkVertexCount++;
+            chunkPositions.push_back(positions[original]);
+            chunkNormals.push_back(normals[original]);
+            chunkColors.push_back(colors[original]);
+          }
+          chunkIndices.push_back(static_cast<unsigned short>(remap[original]));
+        }
+        ++triIndex;
+      }
+
+      Mesh chunkMesh = {0};
+      chunkMesh.vertexCount = chunkVertexCount;
+      chunkMesh.triangleCount = static_cast<int>(chunkIndices.size() / 3);
+      chunkMesh.vertices = static_cast<float *>(
+          MemAlloc(chunkVertexCount * 3 * sizeof(float)));
+      chunkMesh.normals = static_cast<float *>(
+          MemAlloc(chunkVertexCount * 3 * sizeof(float)));
+      chunkMesh.colors = static_cast<unsigned char *>(
+          MemAlloc(chunkVertexCount * 4 * sizeof(unsigned char)));
+      chunkMesh.indices = static_cast<unsigned short *>(
+          MemAlloc(chunkIndices.size() * sizeof(unsigned short)));
+      chunkMesh.texcoords = nullptr;
+      chunkMesh.texcoords2 = nullptr;
+      chunkMesh.tangents = nullptr;
+
+      for (int v = 0; v < chunkVertexCount; ++v)
+      {
+        const Vector3 &pos = chunkPositions[v];
+        chunkMesh.vertices[v * 3 + 0] = pos.x;
+        chunkMesh.vertices[v * 3 + 1] = pos.y;
+        chunkMesh.vertices[v * 3 + 2] = pos.z;
+
+        const Vector3 &normal = chunkNormals[v];
+        chunkMesh.normals[v * 3 + 0] = normal.x;
+        chunkMesh.normals[v * 3 + 1] = normal.y;
+        chunkMesh.normals[v * 3 + 2] = normal.z;
+
+        const Color color = chunkColors[v];
+        chunkMesh.colors[v * 4 + 0] = color.r;
+        chunkMesh.colors[v * 4 + 1] = color.g;
+        chunkMesh.colors[v * 4 + 2] = color.b;
+        chunkMesh.colors[v * 4 + 3] = color.a;
+      }
+
+      std::memcpy(chunkMesh.indices, chunkIndices.data(),
+                  chunkIndices.size() * sizeof(unsigned short));
+      UploadMesh(&chunkMesh, false);
+      meshes.push_back(chunkMesh);
+    }
+
+    if (meshes.empty())
+    {
+      return model;
+    }
+
+    model.transform = MatrixIdentity();
+    model.meshCount = static_cast<int>(meshes.size());
+    model.meshes = static_cast<Mesh *>(
+        MemAlloc(model.meshCount * sizeof(Mesh)));
+    for (int i = 0; i < model.meshCount; ++i)
+    {
+      model.meshes[i] = meshes[i];
+    }
+    model.materialCount = 1;
+    model.materials = static_cast<Material *>(MemAlloc(sizeof(Material)));
+    model.materials[0] = LoadMaterialDefault();
+    model.meshMaterial = static_cast<int *>(
+        MemAlloc(model.meshCount * sizeof(int)));
+    for (int i = 0; i < model.meshCount; ++i)
+    {
+      model.meshMaterial[i] = 0;
+    }
+
     return model;
   }
 
-  const int stride = meshGL.numProp;
-  std::vector<Vector3> positions(vertexCount);
-  for (int v = 0; v < vertexCount; ++v) {
-    const int base = v * stride;
-    // Convert from the scene's Z-up coordinates to raylib's Y-up system.
-    const float cadX = meshGL.vertProperties[base + 0] * kSceneScale;
-    const float cadY = meshGL.vertProperties[base + 1] * kSceneScale;
-    const float cadZ = meshGL.vertProperties[base + 2] * kSceneScale;
-    positions[v] = {cadX, cadZ, -cadY};
-  }
+  void DrawAxes(float length)
+  {
+    const float shaftRadius = std::max(length * 0.02f, 0.01f);
+    const float headLength = std::min(length * 0.2f, length * 0.75f);
+    const float headRadius = shaftRadius * 2.5f;
 
-  std::vector<Vector3> accum(vertexCount, {0.0f, 0.0f, 0.0f});
-  for (int tri = 0; tri < triangleCount; ++tri) {
-    const int i0 = meshGL.triVerts[tri * 3 + 0];
-    const int i1 = meshGL.triVerts[tri * 3 + 1];
-    const int i2 = meshGL.triVerts[tri * 3 + 2];
+    auto drawAxis = [&](Vector3 direction, Color color)
+    {
+      const Vector3 origin = {0.0f, 0.0f, 0.0f};
+      const float shaftLength = std::max(length - headLength, 0.0f);
+      const Vector3 shaftEnd = Vector3Scale(direction, shaftLength);
+      const Vector3 axisEnd = Vector3Scale(direction, length);
 
-    const Vector3 p0 = positions[i0];
-    const Vector3 p1 = positions[i1];
-    const Vector3 p2 = positions[i2];
-
-    const Vector3 u = {p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
-    const Vector3 v = {p2.x - p0.x, p2.y - p0.y, p2.z - p0.z};
-    const Vector3 n = {u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z,
-                       u.x * v.y - u.y * v.x};
-
-    accum[i0].x += n.x;
-    accum[i0].y += n.y;
-    accum[i0].z += n.z;
-    accum[i1].x += n.x;
-    accum[i1].y += n.y;
-    accum[i1].z += n.z;
-    accum[i2].x += n.x;
-    accum[i2].y += n.y;
-    accum[i2].z += n.z;
-  }
-
-  std::vector<Vector3> normals(vertexCount);
-  std::vector<Color> colors(vertexCount);
-  const Vector3 lightDir = Vector3Normalize({0.45f, 0.85f, 0.35f});
-  for (int v = 0; v < vertexCount; ++v) {
-    const Vector3 n = accum[v];
-    const float length = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
-
-    Vector3 normal = {0.0f, 1.0f, 0.0f};
-    if (length > 0.0f) {
-      normal = {n.x / length, n.y / length, n.z / length};
-    }
-    normals[v] = normal;
-
-    float intensity = Vector3DotProduct(normal, lightDir);
-    intensity = Clamp(intensity, 0.0f, 1.0f);
-    constexpr int toonSteps = 3;
-    int level = static_cast<int>(std::floor(intensity * toonSteps));
-    if (level >= toonSteps) level = toonSteps - 1;
-    const float toon = (toonSteps > 1)
-                           ? static_cast<float>(level) /
-                                 static_cast<float>(toonSteps - 1)
-                           : intensity;
-    const float ambient = 0.3f;
-    const float diffuse = 0.7f;
-    float finalIntensity = Clamp(ambient + diffuse * toon, 0.0f, 1.0f);
-
-    const Color base = kBaseColor;
-    Color color = {0};
-    color.r = static_cast<unsigned char>(
-        Clamp(base.r * finalIntensity, 0.0f, 255.0f));
-    color.g = static_cast<unsigned char>(
-        Clamp(base.g * finalIntensity, 0.0f, 255.0f));
-    color.b = static_cast<unsigned char>(
-        Clamp(base.b * finalIntensity, 0.0f, 255.0f));
-    color.a = base.a;
-    colors[v] = color;
-  }
-
-  constexpr int kMaxVerticesPerMesh = std::numeric_limits<unsigned short>::max();
-  std::vector<int> remap(vertexCount, 0);
-  std::vector<int> remapMarker(vertexCount, 0);
-  int chunkToken = 1;
-
-  std::vector<Mesh> meshes;
-  meshes.reserve(
-      static_cast<size_t>(triangleCount) / kMaxVerticesPerMesh + 1);
-
-  int triIndex = 0;
-  while (triIndex < triangleCount) {
-    const int currentToken = chunkToken++;
-    int chunkVertexCount = 0;
-    std::vector<Vector3> chunkPositions;
-    std::vector<Vector3> chunkNormals;
-    std::vector<Color> chunkColors;
-    std::vector<unsigned short> chunkIndices;
-
-    chunkPositions.reserve(std::min(kMaxVerticesPerMesh, vertexCount));
-    chunkNormals.reserve(std::min(kMaxVerticesPerMesh, vertexCount));
-    chunkColors.reserve(std::min(kMaxVerticesPerMesh, vertexCount));
-    chunkIndices.reserve(std::min(kMaxVerticesPerMesh, vertexCount) * 3);
-
-    while (triIndex < triangleCount) {
-      const int indices[3] = {
-          static_cast<int>(meshGL.triVerts[triIndex * 3 + 0]),
-          static_cast<int>(meshGL.triVerts[triIndex * 3 + 1]),
-          static_cast<int>(meshGL.triVerts[triIndex * 3 + 2])};
-
-      int needed = 0;
-      for (int j = 0; j < 3; ++j) {
-        if (remapMarker[indices[j]] != currentToken) {
-          ++needed;
-        }
+      if (shaftLength > 0.0f)
+      {
+        DrawCylinderEx(origin, shaftEnd, shaftRadius, shaftRadius, 12, Fade(color, 0.65f));
       }
+      DrawCylinderEx(shaftEnd, axisEnd, headRadius, 0.0f, 16, color);
+    };
 
-      if (chunkVertexCount + needed > kMaxVerticesPerMesh) {
-        break;
-      }
+    drawAxis({1.0f, 0.0f, 0.0f}, RED);   // +X
+    drawAxis({0.0f, 1.0f, 0.0f}, GREEN); // +Y
+    drawAxis({0.0f, 0.0f, 1.0f}, BLUE);  // +Z
 
-      for (int j = 0; j < 3; ++j) {
-        const int original = indices[j];
-        if (remapMarker[original] != currentToken) {
-          remapMarker[original] = currentToken;
-          remap[original] = chunkVertexCount++;
-          chunkPositions.push_back(positions[original]);
-          chunkNormals.push_back(normals[original]);
-          chunkColors.push_back(colors[original]);
-        }
-        chunkIndices.push_back(static_cast<unsigned short>(remap[original]));
-      }
-      ++triIndex;
+    DrawSphereEx({0.0f, 0.0f, 0.0f}, shaftRadius * 1.2f, 12, 12, LIGHTGRAY);
+  }
+
+  void DrawXZGrid(int halfLines, float spacing, Color color)
+  {
+    for (int i = -halfLines; i <= halfLines; ++i)
+    {
+      const float offset = static_cast<float>(i) * spacing;
+      DrawLine3D({offset, 0.0f, -halfLines * spacing},
+                 {offset, 0.0f, halfLines * spacing}, color);
+      DrawLine3D({-halfLines * spacing, 0.0f, offset},
+                 {halfLines * spacing, 0.0f, offset}, color);
+    }
+  }
+
+  std::optional<std::filesystem::path> FindDefaultScene()
+  {
+    auto cwdCandidate = std::filesystem::current_path() / "scene.js";
+    if (std::filesystem::exists(cwdCandidate))
+      return cwdCandidate;
+    if (const char *home = std::getenv("HOME"))
+    {
+      std::filesystem::path homeCandidate = std::filesystem::path(home) / "scene.js";
+      if (std::filesystem::exists(homeCandidate))
+        return homeCandidate;
+    }
+    return std::nullopt;
+  }
+
+  std::optional<std::string> ReadTextFile(const std::filesystem::path &path)
+  {
+    std::ifstream file(path);
+    if (!file)
+      return std::nullopt;
+    std::ostringstream ss;
+    ss << file.rdbuf();
+    return ss.str();
+  }
+
+  JSModuleDef *FilesystemModuleLoader(JSContext *ctx, const char *module_name, void *opaque)
+  {
+    auto *data = static_cast<ModuleLoaderData *>(opaque);
+    std::filesystem::path resolved(module_name);
+    if (resolved.is_relative())
+    {
+      const std::filesystem::path base = data && !data->baseDir.empty()
+                                             ? data->baseDir
+                                             : std::filesystem::current_path();
+      resolved = base / resolved;
+    }
+    resolved = std::filesystem::absolute(resolved).lexically_normal();
+
+    if (data)
+    {
+      data->baseDir = resolved.parent_path();
+      data->dependencies.insert(resolved);
     }
 
-    Mesh chunkMesh = {0};
-    chunkMesh.vertexCount = chunkVertexCount;
-    chunkMesh.triangleCount = static_cast<int>(chunkIndices.size() / 3);
-    chunkMesh.vertices = static_cast<float *>(
-        MemAlloc(chunkVertexCount * 3 * sizeof(float)));
-    chunkMesh.normals = static_cast<float *>(
-        MemAlloc(chunkVertexCount * 3 * sizeof(float)));
-    chunkMesh.colors = static_cast<unsigned char *>(
-        MemAlloc(chunkVertexCount * 4 * sizeof(unsigned char)));
-    chunkMesh.indices = static_cast<unsigned short *>(
-        MemAlloc(chunkIndices.size() * sizeof(unsigned short)));
-    chunkMesh.texcoords = nullptr;
-    chunkMesh.texcoords2 = nullptr;
-    chunkMesh.tangents = nullptr;
-
-    for (int v = 0; v < chunkVertexCount; ++v) {
-      const Vector3 &pos = chunkPositions[v];
-      chunkMesh.vertices[v * 3 + 0] = pos.x;
-      chunkMesh.vertices[v * 3 + 1] = pos.y;
-      chunkMesh.vertices[v * 3 + 2] = pos.z;
-
-      const Vector3 &normal = chunkNormals[v];
-      chunkMesh.normals[v * 3 + 0] = normal.x;
-      chunkMesh.normals[v * 3 + 1] = normal.y;
-      chunkMesh.normals[v * 3 + 2] = normal.z;
-
-      const Color color = chunkColors[v];
-      chunkMesh.colors[v * 4 + 0] = color.r;
-      chunkMesh.colors[v * 4 + 1] = color.g;
-      chunkMesh.colors[v * 4 + 2] = color.b;
-      chunkMesh.colors[v * 4 + 3] = color.a;
+    auto source = ReadTextFile(resolved);
+    if (!source)
+    {
+      JS_ThrowReferenceError(ctx, "Unable to load module '%s'", resolved.string().c_str());
+      return nullptr;
     }
 
-    std::memcpy(chunkMesh.indices, chunkIndices.data(),
-                chunkIndices.size() * sizeof(unsigned short));
-    UploadMesh(&chunkMesh, false);
-    meshes.push_back(chunkMesh);
-  }
-
-  if (meshes.empty()) {
-    return model;
-  }
-
-  model.transform = MatrixIdentity();
-  model.meshCount = static_cast<int>(meshes.size());
-  model.meshes = static_cast<Mesh *>(
-      MemAlloc(model.meshCount * sizeof(Mesh)));
-  for (int i = 0; i < model.meshCount; ++i) {
-    model.meshes[i] = meshes[i];
-  }
-  model.materialCount = 1;
-  model.materials = static_cast<Material *>(MemAlloc(sizeof(Material)));
-  model.materials[0] = LoadMaterialDefault();
-  model.meshMaterial = static_cast<int *>(
-      MemAlloc(model.meshCount * sizeof(int)));
-  for (int i = 0; i < model.meshCount; ++i) {
-    model.meshMaterial[i] = 0;
-  }
-
-  return model;
-}
-
-void DrawAxes(float length) {
-  const float shaftRadius = std::max(length * 0.02f, 0.01f);
-  const float headLength = std::min(length * 0.2f, length * 0.75f);
-  const float headRadius = shaftRadius * 2.5f;
-
-  auto drawAxis = [&](Vector3 direction, Color color) {
-    const Vector3 origin = {0.0f, 0.0f, 0.0f};
-    const float shaftLength = std::max(length - headLength, 0.0f);
-    const Vector3 shaftEnd = Vector3Scale(direction, shaftLength);
-    const Vector3 axisEnd = Vector3Scale(direction, length);
-
-    if (shaftLength > 0.0f) {
-      DrawCylinderEx(origin, shaftEnd, shaftRadius, shaftRadius, 12, Fade(color, 0.65f));
+    const std::string moduleName = resolved.string();
+    JSValue funcVal = JS_Eval(ctx, source->c_str(), source->size(), moduleName.c_str(),
+                              JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    if (JS_IsException(funcVal))
+    {
+      return nullptr;
     }
-    DrawCylinderEx(shaftEnd, axisEnd, headRadius, 0.0f, 16, color);
+
+    auto *module = static_cast<JSModuleDef *>(JS_VALUE_GET_PTR(funcVal));
+    JS_FreeValue(ctx, funcVal);
+    return module;
+  }
+
+  struct LoadResult
+  {
+    bool success = false;
+    std::shared_ptr<manifold::Manifold> manifold;
+    std::string message;
+    std::vector<std::filesystem::path> dependencies;
   };
 
-  drawAxis({1.0f, 0.0f, 0.0f}, RED);    // +X
-  drawAxis({0.0f, 1.0f, 0.0f}, GREEN);  // +Y
-  drawAxis({0.0f, 0.0f, 1.0f}, BLUE);   // +Z
+  LoadResult LoadSceneFromFile(JSRuntime *runtime, const std::filesystem::path &path)
+  {
+    LoadResult result;
+    const auto absolutePath = std::filesystem::absolute(path);
+    if (!std::filesystem::exists(absolutePath))
+    {
+      result.message = "Scene file not found: " + absolutePath.string();
+      return result;
+    }
+    g_module_loader_data.baseDir = absolutePath.parent_path();
+    g_module_loader_data.dependencies.clear();
+    g_module_loader_data.dependencies.insert(absolutePath);
+    auto sourceOpt = ReadTextFile(absolutePath);
+    if (!sourceOpt)
+    {
+      result.message = "Unable to read scene file: " + absolutePath.string();
+      result.dependencies.assign(g_module_loader_data.dependencies.begin(),
+                                 g_module_loader_data.dependencies.end());
+      return result;
+    }
+    JSContext *ctx = JS_NewContext(runtime);
+    RegisterBindings(ctx);
 
-  DrawSphereEx({0.0f, 0.0f, 0.0f}, shaftRadius * 1.2f, 12, 12, LIGHTGRAY);
-}
+    auto captureException = [&]()
+    {
+      JSValue exc = JS_GetException(ctx);
+      JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
+      const char *stackStr = JS_ToCString(ctx, JS_IsUndefined(stack) ? exc : stack);
+      result.message = stackStr ? stackStr : "JavaScript error";
+      JS_FreeCString(ctx, stackStr);
+      JS_FreeValue(ctx, stack);
+      JS_FreeValue(ctx, exc);
+    };
+    auto assignDependencies = [&]()
+    {
+      result.dependencies.assign(g_module_loader_data.dependencies.begin(),
+                                 g_module_loader_data.dependencies.end());
+    };
 
-void DrawXZGrid(int halfLines, float spacing, Color color) {
-  for (int i = -halfLines; i <= halfLines; ++i) {
-    const float offset = static_cast<float>(i) * spacing;
-    DrawLine3D({offset, 0.0f, -halfLines * spacing},
-               {offset, 0.0f, halfLines * spacing}, color);
-    DrawLine3D({-halfLines * spacing, 0.0f, offset},
-               {halfLines * spacing, 0.0f, offset}, color);
-  }
-}
+    JSValue moduleFunc = JS_Eval(ctx, sourceOpt->c_str(), sourceOpt->size(), absolutePath.string().c_str(),
+                                 JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    if (JS_IsException(moduleFunc))
+    {
+      captureException();
+      assignDependencies();
+      JS_FreeContext(ctx);
+      return result;
+    }
 
-std::optional<std::filesystem::path> FindDefaultScene() {
-  auto cwdCandidate = std::filesystem::current_path() / "scene.js";
-  if (std::filesystem::exists(cwdCandidate)) return cwdCandidate;
-  if (const char *home = std::getenv("HOME")) {
-    std::filesystem::path homeCandidate = std::filesystem::path(home) / "scene.js";
-    if (std::filesystem::exists(homeCandidate)) return homeCandidate;
-  }
-  return std::nullopt;
-}
+    if (JS_ResolveModule(ctx, moduleFunc) < 0)
+    {
+      captureException();
+      JS_FreeValue(ctx, moduleFunc);
+      assignDependencies();
+      JS_FreeContext(ctx);
+      return result;
+    }
 
-std::optional<std::string> ReadTextFile(const std::filesystem::path &path) {
-  std::ifstream file(path);
-  if (!file) return std::nullopt;
-  std::ostringstream ss;
-  ss << file.rdbuf();
-  return ss.str();
-}
+    auto *module = static_cast<JSModuleDef *>(JS_VALUE_GET_PTR(moduleFunc));
+    JSValue evalResult = JS_EvalFunction(ctx, moduleFunc);
+    if (JS_IsException(evalResult))
+    {
+      captureException();
+      assignDependencies();
+      JS_FreeContext(ctx);
+      return result;
+    }
+    JS_FreeValue(ctx, evalResult);
 
-JSModuleDef *FilesystemModuleLoader(JSContext *ctx, const char *module_name, void *opaque) {
-  auto *data = static_cast<ModuleLoaderData *>(opaque);
-  std::filesystem::path resolved(module_name);
-  if (resolved.is_relative()) {
-    const std::filesystem::path base = data && !data->baseDir.empty()
-                                           ? data->baseDir
-                                           : std::filesystem::current_path();
-    resolved = base / resolved;
-  }
-  resolved = std::filesystem::absolute(resolved).lexically_normal();
+    JSValue moduleNamespace = JS_GetModuleNamespace(ctx, module);
+    if (JS_IsException(moduleNamespace))
+    {
+      captureException();
+      assignDependencies();
+      JS_FreeContext(ctx);
+      return result;
+    }
 
-  if (data) {
-    data->baseDir = resolved.parent_path();
-    data->dependencies.insert(resolved);
-  }
-
-  auto source = ReadTextFile(resolved);
-  if (!source) {
-    JS_ThrowReferenceError(ctx, "Unable to load module '%s'", resolved.string().c_str());
-    return nullptr;
-  }
-
-  const std::string moduleName = resolved.string();
-  JSValue funcVal = JS_Eval(ctx, source->c_str(), source->size(), moduleName.c_str(),
-                            JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-  if (JS_IsException(funcVal)) {
-    return nullptr;
-  }
-
-  auto *module = static_cast<JSModuleDef *>(JS_VALUE_GET_PTR(funcVal));
-  JS_FreeValue(ctx, funcVal);
-  return module;
-}
-
-struct LoadResult {
-  bool success = false;
-  std::shared_ptr<manifold::Manifold> manifold;
-  std::string message;
-  std::vector<std::filesystem::path> dependencies;
-};
-
-LoadResult LoadSceneFromFile(JSRuntime *runtime, const std::filesystem::path &path) {
-  LoadResult result;
-  const auto absolutePath = std::filesystem::absolute(path);
-  if (!std::filesystem::exists(absolutePath)) {
-    result.message = "Scene file not found: " + absolutePath.string();
-    return result;
-  }
-  g_module_loader_data.baseDir = absolutePath.parent_path();
-  g_module_loader_data.dependencies.clear();
-  g_module_loader_data.dependencies.insert(absolutePath);
-  auto sourceOpt = ReadTextFile(absolutePath);
-  if (!sourceOpt) {
-    result.message = "Unable to read scene file: " + absolutePath.string();
-    result.dependencies.assign(g_module_loader_data.dependencies.begin(),
-                               g_module_loader_data.dependencies.end());
-    return result;
-  }
-  JSContext *ctx = JS_NewContext(runtime);
-  RegisterBindings(ctx);
-
-  auto captureException = [&]() {
-    JSValue exc = JS_GetException(ctx);
-    JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
-    const char *stackStr = JS_ToCString(ctx, JS_IsUndefined(stack) ? exc : stack);
-    result.message = stackStr ? stackStr : "JavaScript error";
-    JS_FreeCString(ctx, stackStr);
-    JS_FreeValue(ctx, stack);
-    JS_FreeValue(ctx, exc);
-  };
-  auto assignDependencies = [&]() {
-    result.dependencies.assign(g_module_loader_data.dependencies.begin(),
-                               g_module_loader_data.dependencies.end());
-  };
-
-  JSValue moduleFunc = JS_Eval(ctx, sourceOpt->c_str(), sourceOpt->size(), absolutePath.string().c_str(),
-                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-  if (JS_IsException(moduleFunc)) {
-    captureException();
-    assignDependencies();
-    JS_FreeContext(ctx);
-    return result;
-  }
-
-  if (JS_ResolveModule(ctx, moduleFunc) < 0) {
-    captureException();
-    JS_FreeValue(ctx, moduleFunc);
-    assignDependencies();
-    JS_FreeContext(ctx);
-    return result;
-  }
-
-  auto *module = static_cast<JSModuleDef *>(JS_VALUE_GET_PTR(moduleFunc));
-  JSValue evalResult = JS_EvalFunction(ctx, moduleFunc);
-  if (JS_IsException(evalResult)) {
-    captureException();
-    assignDependencies();
-    JS_FreeContext(ctx);
-    return result;
-  }
-  JS_FreeValue(ctx, evalResult);
-
-  JSValue moduleNamespace = JS_GetModuleNamespace(ctx, module);
-  if (JS_IsException(moduleNamespace)) {
-    captureException();
-    assignDependencies();
-    JS_FreeContext(ctx);
-    return result;
-  }
-
-  JSValue sceneVal = JS_GetPropertyStr(ctx, moduleNamespace, "scene");
-  if (JS_IsException(sceneVal)) {
+    JSValue sceneVal = JS_GetPropertyStr(ctx, moduleNamespace, "scene");
+    if (JS_IsException(sceneVal))
+    {
+      JS_FreeValue(ctx, moduleNamespace);
+      captureException();
+      assignDependencies();
+      JS_FreeContext(ctx);
+      return result;
+    }
     JS_FreeValue(ctx, moduleNamespace);
-    captureException();
-    assignDependencies();
-    JS_FreeContext(ctx);
-    return result;
-  }
-  JS_FreeValue(ctx, moduleNamespace);
 
-  if (JS_IsUndefined(sceneVal)) {
+    if (JS_IsUndefined(sceneVal))
+    {
+      JS_FreeValue(ctx, sceneVal);
+      JS_FreeContext(ctx);
+      result.message = "Scene module must export 'scene'";
+      assignDependencies();
+      return result;
+    }
+
+    auto sceneHandle = GetManifoldHandle(ctx, sceneVal);
+    if (!sceneHandle)
+    {
+      JS_FreeValue(ctx, sceneVal);
+      JS_FreeContext(ctx);
+      result.message = "Exported 'scene' is not a manifold";
+      assignDependencies();
+      return result;
+    }
+
+    result.manifold = sceneHandle;
+    result.success = true;
+    result.message = "Loaded " + absolutePath.string();
+    assignDependencies();
     JS_FreeValue(ctx, sceneVal);
     JS_FreeContext(ctx);
-    result.message = "Scene module must export 'scene'";
-    assignDependencies();
     return result;
   }
 
-  auto sceneHandle = GetManifoldHandle(ctx, sceneVal);
-  if (!sceneHandle) {
-    JS_FreeValue(ctx, sceneVal);
-    JS_FreeContext(ctx);
-    result.message = "Exported 'scene' is not a manifold";
-    assignDependencies();
-    return result;
+  bool ReplaceScene(Model &model,
+                    const std::shared_ptr<manifold::Manifold> &scene)
+  {
+    if (!scene)
+      return false;
+    Model newModel = CreateRaylibModelFrom(scene->GetMeshGL());
+    DestroyModel(model);
+    model = newModel;
+    return true;
   }
 
-  result.manifold = sceneHandle;
-  result.success = true;
-  result.message = "Loaded " + absolutePath.string();
-  assignDependencies();
-  JS_FreeValue(ctx, sceneVal);
-  JS_FreeContext(ctx);
-  return result;
-}
+} // namespace
 
-bool ReplaceScene(Model &model,
-                  const std::shared_ptr<manifold::Manifold> &scene) {
-  if (!scene) return false;
-  Model newModel = CreateRaylibModelFrom(scene->GetMeshGL());
-  DestroyModel(model);
-  model = newModel;
-  return true;
-}
-
-}  // namespace
-
-int main() {
+int main()
+{
   SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
   InitWindow(1280, 720, "dingcad");
   SetTargetFPS(60);
@@ -731,7 +797,8 @@ int main() {
   Font brandingFont = GetFontDefault();
   bool brandingFontCustom = false;
   const std::filesystem::path consolasPath("/System/Library/Fonts/Supplemental/Consolas.ttf");
-  if (std::filesystem::exists(consolasPath)) {
+  if (std::filesystem::exists(consolasPath))
+  {
     brandingFont = LoadFontEx(consolasPath.string().c_str(), static_cast<int>(kBrandFontSize), nullptr, 0);
     brandingFontCustom = true;
   }
@@ -752,52 +819,69 @@ int main() {
   const float initialYaw = orbitYaw;
   const float initialPitch = orbitPitch;
 
+  bool alternateControls = true; // Toggle between original and modified control schemes (starts with custom controls)
+  bool autoCenterMode = false;   // Toggle automatic camera centering and rotation on scene
+  float autoCenterYaw = 0.0f;    // Current rotation angle for auto-center mode
+
   JSRuntime *runtime = JS_NewRuntime();
   EnsureManifoldClass(runtime);
   JS_SetModuleLoaderFunc(runtime, nullptr, FilesystemModuleLoader, &g_module_loader_data);
 
   std::shared_ptr<manifold::Manifold> scene = nullptr;
   std::string statusMessage;
+  double statusMessageTime = 0.0; // Time when status message was last set
   std::filesystem::path scriptPath;
   std::unordered_map<std::filesystem::path, WatchedFile> watchedFiles;
   auto defaultScript = FindDefaultScene();
-  auto reportStatus = [&](const std::string &message) {
+  auto reportStatus = [&](const std::string &message)
+  {
     statusMessage = message;
+    statusMessageTime = GetTime(); // Record when message was set
     TraceLog(LOG_INFO, "%s", statusMessage.c_str());
     std::cout << statusMessage << std::endl;
   };
-  auto setWatchedFiles = [&](const std::vector<std::filesystem::path> &deps) {
+  auto setWatchedFiles = [&](const std::vector<std::filesystem::path> &deps)
+  {
     std::unordered_map<std::filesystem::path, WatchedFile> updated;
-    for (const auto &dep : deps) {
+    for (const auto &dep : deps)
+    {
       WatchedFile entry;
       std::error_code ec;
       auto ts = std::filesystem::last_write_time(dep, ec);
-      if (!ec) {
+      if (!ec)
+      {
         entry.timestamp = ts;
       }
       updated.emplace(dep, entry);
     }
     watchedFiles = std::move(updated);
   };
-  if (defaultScript) {
+  if (defaultScript)
+  {
     scriptPath = std::filesystem::absolute(*defaultScript);
     auto load = LoadSceneFromFile(runtime, scriptPath);
-    if (load.success) {
+    if (load.success)
+    {
       scene = load.manifold;
-      reportStatus(load.message);
-    } else {
+      reportStatus("Editing: " + scriptPath.filename().string());
+    }
+    else
+    {
       reportStatus(load.message);
     }
-    if (!load.dependencies.empty()) {
+    if (!load.dependencies.empty())
+    {
       setWatchedFiles(load.dependencies);
     }
   }
-  if (!scene) {
+  if (!scene)
+  {
     manifold::Manifold cube = manifold::Manifold::Cube({2.0, 2.0, 2.0}, true);
     manifold::Manifold sphere = manifold::Manifold::Sphere(1.2, 0);
     manifold::Manifold combo = cube + sphere.Translate({0.0, 0.8, 0.0});
     scene = std::make_shared<manifold::Manifold>(combo);
-    if (statusMessage.empty()) {
+    if (statusMessage.empty())
+    {
       reportStatus("No scene.js found. Using built-in sample.");
     }
   }
@@ -809,10 +893,12 @@ int main() {
   Shader normalDepthShader = LoadShaderFromMemory(kNormalDepthVS, kNormalDepthFS);
   Shader edgeShader = LoadShaderFromMemory(kEdgeQuadVS, kEdgeFS);
 
-  if (outlineShader.id == 0 || toonShader.id == 0 || normalDepthShader.id == 0 || edgeShader.id == 0) {
+  if (outlineShader.id == 0 || toonShader.id == 0 || normalDepthShader.id == 0 || edgeShader.id == 0)
+  {
     TraceLog(LOG_ERROR, "Failed to load one or more shaders.");
     DestroyModel(model);
-    if (brandingFontCustom) {
+    if (brandingFontCustom)
+    {
       UnloadFont(brandingFont);
     }
     JS_FreeRuntime(runtime);
@@ -826,7 +912,8 @@ int main() {
   Material outlineMat = LoadMaterialDefault();
   outlineMat.shader = outlineShader;
 
-  auto setOutlineUniforms = [&](float worldThickness, Color color) {
+  auto setOutlineUniforms = [&](float worldThickness, Color color)
+  {
     float c[4] = {
         color.r / 255.0f,
         color.g / 255.0f,
@@ -897,7 +984,8 @@ int main() {
       1.0f};
   SetShaderValue(edgeShader, locInkColor, inkColor, SHADER_UNIFORM_VEC4);
 
-  auto makeRenderTargets = [&]() {
+  auto makeRenderTargets = [&]()
+  {
     const int width = std::max(GetScreenWidth(), 1);
     const int height = std::max(GetScreenHeight(), 1);
     RenderTexture2D color = LoadRenderTexture(width, height);
@@ -917,121 +1005,165 @@ int main() {
   const float zNear = 0.01f;
   const float zFar = 1000.0f;
 
-  while (!WindowShouldClose()) {
+  while (!WindowShouldClose())
+  {
     const Vector2 mouseDelta = GetMouseDelta();
 
-    auto reloadScene = [&]() {
+    // Check if status message should timeout (3 seconds)
+    if (!statusMessage.empty() && GetTime() - statusMessageTime > 3.0)
+    {
+      // Set default status to show current file
+      if (!scriptPath.empty())
+      {
+        statusMessage = "Editing: " + scriptPath.filename().string();
+      }
+      else
+      {
+        statusMessage = "dingcad";
+      }
+    }
+
+    auto reloadScene = [&]()
+    {
       auto load = LoadSceneFromFile(runtime, scriptPath);
-      if (load.success) {
+      if (load.success)
+      {
         scene = load.manifold;
         ReplaceScene(model, scene);
-        reportStatus(load.message);
-      } else {
+        reportStatus("Editing: " + scriptPath.filename().string());
+      }
+      else
+      {
         reportStatus(load.message);
       }
-      if (!load.dependencies.empty()) {
+      if (!load.dependencies.empty())
+      {
         setWatchedFiles(load.dependencies);
       }
     };
 
-    if (!scriptPath.empty()) {
+    if (!scriptPath.empty())
+    {
       bool changed = false;
-      for (const auto &entry : watchedFiles) {
+      for (const auto &entry : watchedFiles)
+      {
         std::error_code ec;
         auto currentTs = std::filesystem::last_write_time(entry.first, ec);
-        if (ec) {
-          if (entry.second.timestamp.has_value()) {
+        if (ec)
+        {
+          if (entry.second.timestamp.has_value())
+          {
             changed = true;
             break;
           }
-        } else if (!entry.second.timestamp.has_value() ||
-                   currentTs != *entry.second.timestamp) {
+        }
+        else if (!entry.second.timestamp.has_value() ||
+                 currentTs != *entry.second.timestamp)
+        {
           changed = true;
           break;
         }
       }
-      if (changed) {
+      if (changed)
+      {
         reloadScene();
       }
     }
 
-    if (IsKeyPressed(KEY_R) && !scriptPath.empty()) {
+    if (IsKeyPressed(KEY_R) && !scriptPath.empty())
+    {
       reloadScene();
     }
 
     static bool prevPDown = false;
     bool exportRequested = false;
 
-    for (int key = GetKeyPressed(); key != 0; key = GetKeyPressed()) {
+    for (int key = GetKeyPressed(); key != 0; key = GetKeyPressed())
+    {
       TraceLog(LOG_INFO, "Key pressed: %d", key);
       std::cout << "Key pressed: " << key << std::endl;
-      if (key == KEY_P) {
+      if (key == KEY_P)
+      {
         exportRequested = true;
       }
     }
 
-    for (int ch = GetCharPressed(); ch != 0; ch = GetCharPressed()) {
+    for (int ch = GetCharPressed(); ch != 0; ch = GetCharPressed())
+    {
       TraceLog(LOG_INFO, "Char pressed: %d", ch);
       std::cout << "Char pressed: " << ch << std::endl;
-      if (ch == 'p' || ch == 'P') {
+      if (ch == 'p' || ch == 'P')
+      {
         exportRequested = true;
+      }
+      if ((ch == 'm' || ch == 'M') && IsKeyDown(KEY_LEFT_SHIFT))
+      {
+        alternateControls = !alternateControls;
+        reportStatus(alternateControls ? "Custom controls active" : "Original controls active");
+      }
+      if ((ch == 'v' || ch == 'V') && IsKeyDown(KEY_LEFT_SHIFT))
+      {
+        autoCenterMode = !autoCenterMode;
+        reportStatus(autoCenterMode ? "Auto-center mode enabled" : "Auto-center mode disabled");
       }
     }
 
     const bool pDown = IsKeyDown(KEY_P);
-    if (pDown && !prevPDown) {
+    if (pDown && !prevPDown)
+    {
       TraceLog(LOG_INFO, "P key down edge detected");
       std::cout << "P key down edge detected" << std::endl;
       exportRequested = true;
     }
     prevPDown = pDown;
 
-    if (!exportRequested && IsKeyPressed(KEY_P)) {
+    if (!exportRequested && IsKeyPressed(KEY_P))
+    {
       exportRequested = true;
     }
 
-    if (exportRequested) {
+    if (exportRequested)
+    {
       TraceLog(LOG_INFO, "Export trigger detected");
       std::cout << "Export trigger detected" << std::endl;
-      if (scene) {
+      if (scene)
+      {
         std::filesystem::path downloads;
-        if (const char *home = std::getenv("HOME")) {
+        if (const char *home = std::getenv("HOME"))
+        {
           downloads = std::filesystem::path(home) / "Downloads";
-        } else {
+        }
+        else
+        {
           downloads = std::filesystem::current_path();
         }
 
         std::error_code dirErr;
         std::filesystem::create_directories(downloads, dirErr);
-        if (dirErr && !std::filesystem::exists(downloads)) {
+        if (dirErr && !std::filesystem::exists(downloads))
+        {
           reportStatus("Export failed: cannot access " + downloads.string());
-        } else {
+        }
+        else
+        {
           std::filesystem::path savePath = downloads / "ding.stl";
           std::string error;
           const bool ok = WriteMeshAsBinaryStl(scene->GetMeshGL(), savePath, error);
           TraceLog(LOG_INFO, "Export path: %s", savePath.string().c_str());
-          if (ok) {
+          if (ok)
+          {
             reportStatus("Saved " + savePath.string());
-          } else {
+          }
+          else
+          {
             reportStatus(error);
           }
         }
-      } else {
+      }
+      else
+      {
         reportStatus("No scene loaded to export");
       }
-    }
-
-    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-      orbitYaw -= mouseDelta.x * 0.01f;
-      orbitPitch += mouseDelta.y * 0.01f;
-      const float limit = DEG2RAD * 89.0f;
-      orbitPitch = Clamp(orbitPitch, -limit, limit);
-    }
-
-    const float wheel = GetMouseWheelMove();
-    if (wheel != 0.0f) {
-      orbitDistance *= (1.0f - wheel * 0.1f);
-      orbitDistance = Clamp(orbitDistance, 1.0f, 50.0f);
     }
 
     const Vector3 forward = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
@@ -1039,14 +1171,52 @@ int main() {
     const Vector3 right = Vector3Normalize(Vector3CrossProduct(worldUp, forward));
     const Vector3 camUp = Vector3CrossProduct(forward, right);
 
-    if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
-      camera.target = Vector3Add(camera.target,
-                                 Vector3Scale(right, mouseDelta.x * 0.01f * orbitDistance));
-      camera.target = Vector3Add(camera.target,
-                                 Vector3Scale(camUp, -mouseDelta.y * 0.01f * orbitDistance));
+    if (alternateControls)
+    {
+      // Alternate controls: Left=pan, Right=orbit
+      if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
+      {
+        camera.target = Vector3Add(camera.target,
+                                   Vector3Scale(right, -mouseDelta.x * 0.01f * orbitDistance));
+        camera.target = Vector3Add(camera.target,
+                                   Vector3Scale(camUp, -mouseDelta.y * 0.01f * orbitDistance));
+      }
+      if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT))
+      {
+        orbitYaw -= mouseDelta.x * 0.01f;
+        orbitPitch += mouseDelta.y * 0.01f;
+        const float limit = DEG2RAD * 89.0f;
+        orbitPitch = Clamp(orbitPitch, -limit, limit);
+      }
+    }
+    else
+    {
+      // Original controls: Left=orbit, Right=pan
+      if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
+      {
+        orbitYaw -= mouseDelta.x * 0.01f;
+        orbitPitch += mouseDelta.y * 0.01f;
+        const float limit = DEG2RAD * 89.0f;
+        orbitPitch = Clamp(orbitPitch, -limit, limit);
+      }
+      if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT))
+      {
+        camera.target = Vector3Add(camera.target,
+                                   Vector3Scale(right, mouseDelta.x * 0.01f * orbitDistance));
+        camera.target = Vector3Add(camera.target,
+                                   Vector3Scale(camUp, -mouseDelta.y * 0.01f * orbitDistance));
+      }
     }
 
-    if (IsKeyPressed(KEY_SPACE)) {
+    const float wheel = GetMouseWheelMove();
+    if (wheel != 0.0f)
+    {
+      orbitDistance *= (1.0f - wheel * 0.1f);
+      orbitDistance = Clamp(orbitDistance, 1.0f, 50.0f);
+    }
+
+    if (IsKeyPressed(KEY_SPACE))
+    {
       camera.target = initialTarget;
       orbitDistance = initialDistance;
       orbitYaw = initialYaw;
@@ -1054,23 +1224,113 @@ int main() {
     }
 
     const float moveSpeed = 0.05f * orbitDistance;
-    if (IsKeyDown(KEY_W)) camera.target = Vector3Add(camera.target, Vector3Scale(forward, moveSpeed));
-    if (IsKeyDown(KEY_S)) camera.target = Vector3Add(camera.target, Vector3Scale(forward, -moveSpeed));
-    if (IsKeyDown(KEY_A)) camera.target = Vector3Add(camera.target, Vector3Scale(right, -moveSpeed));
-    if (IsKeyDown(KEY_D)) camera.target = Vector3Add(camera.target, Vector3Scale(right, moveSpeed));
-    if (IsKeyDown(KEY_Q)) camera.target = Vector3Add(camera.target, Vector3Scale(worldUp, -moveSpeed));
-    if (IsKeyDown(KEY_E)) camera.target = Vector3Add(camera.target, Vector3Scale(worldUp, moveSpeed));
+    if (alternateControls)
+    {
+      // Alternate controls: W=up, A=down, Q=back, E=forward, S=back, D=left
+      if (IsKeyDown(KEY_W))
+        camera.target = Vector3Add(camera.target, Vector3Scale(worldUp, moveSpeed));
+      if (IsKeyDown(KEY_S))
+        camera.target = Vector3Add(camera.target, Vector3Scale(worldUp, -moveSpeed));
+      if (IsKeyDown(KEY_A))
+        camera.target = Vector3Add(camera.target, Vector3Scale(right, moveSpeed));
+      if (IsKeyDown(KEY_D))
+        camera.target = Vector3Add(camera.target, Vector3Scale(right, -moveSpeed));
+      if (IsKeyDown(KEY_Q))
+        camera.target = Vector3Add(camera.target, Vector3Scale(forward, -moveSpeed));
+      if (IsKeyDown(KEY_E))
+        camera.target = Vector3Add(camera.target, Vector3Scale(forward, moveSpeed));
+    }
+    else
+    {
+      // Original controls: W=forward, S=backward, A=left, D=right, Q=down, E=up
+      if (IsKeyDown(KEY_W))
+        camera.target = Vector3Add(camera.target, Vector3Scale(forward, moveSpeed));
+      if (IsKeyDown(KEY_S))
+        camera.target = Vector3Add(camera.target, Vector3Scale(forward, -moveSpeed));
+      if (IsKeyDown(KEY_A))
+        camera.target = Vector3Add(camera.target, Vector3Scale(right, -moveSpeed));
+      if (IsKeyDown(KEY_D))
+        camera.target = Vector3Add(camera.target, Vector3Scale(right, moveSpeed));
+      if (IsKeyDown(KEY_Q))
+        camera.target = Vector3Add(camera.target, Vector3Scale(worldUp, -moveSpeed));
+      if (IsKeyDown(KEY_E))
+        camera.target = Vector3Add(camera.target, Vector3Scale(worldUp, moveSpeed));
+    }
+
+    // Auto-center mode: automatically position camera to view entire scene and rotate
+    static bool prevAutoCenterMode = false;
+    if (autoCenterMode && scene)
+    {
+      if (!prevAutoCenterMode)
+      {
+        // Just enabled: calculate scene bounds and set initial position
+        manifold::Box bbox = scene->BoundingBox();
+        Vector3 sceneCenter = {
+            static_cast<float>((bbox.min.x + bbox.max.x) * 0.5),
+            static_cast<float>((bbox.min.y + bbox.max.y) * 0.5),
+            static_cast<float>((bbox.min.z + bbox.max.z) * 0.5)};
+
+        // Calculate scene size
+        Vector3 sceneSize = {
+            static_cast<float>(bbox.max.x - bbox.min.x),
+            static_cast<float>(bbox.max.y - bbox.min.y),
+            static_cast<float>(bbox.max.z - bbox.min.z)};
+
+        // Calculate distance needed to fit scene in view (with some padding)
+        float maxSize = std::max({sceneSize.x, sceneSize.y, sceneSize.z});
+        float fovRadians = camera.fovy * DEG2RAD;
+        float requiredDistance = maxSize * 0.5f / tanf(fovRadians * 0.5f) * 0.25f; // 20% padding
+
+        // Set camera target to origin for rotation
+        camera.target = {0.0f, 0.0f, 0.0f};
+
+        // Set orbit distance
+        orbitDistance = std::max(requiredDistance, 1.0f);
+
+        // Reset rotation
+        autoCenterYaw = 0.0f;
+      }
+
+      // Continuous rotation: move camera in circle around center
+      autoCenterYaw += GetFrameTime() * 0.5f; // Rotate at 0.5 radians per second
+      float radius = orbitDistance;           // Use full orbit distance for larger rotation circle
+      float elevationAngle = DEG2RAD * 35.0f; // Higher elevation angle
+      // Rotate around the scene center (camera.target)
+      Vector3 offset = {
+          radius * cosf(autoCenterYaw),
+          radius * sinf(elevationAngle), // Higher elevation
+          radius * sinf(autoCenterYaw)};
+      camera.position = Vector3Add(camera.target, offset);
+
+      // Make camera look at target
+      camera.up = {0.0f, 1.0f, 0.0f};
+    }
+    else if (prevAutoCenterMode && !autoCenterMode)
+    {
+      // Just disabled: reset to initial view
+      camera.target = initialTarget;
+      orbitDistance = initialDistance;
+      orbitYaw = initialYaw;
+      orbitPitch = initialPitch;
+    }
+    prevAutoCenterMode = autoCenterMode;
 
     const Vector3 offsets = {
         orbitDistance * cosf(orbitPitch) * sinf(orbitYaw),
         orbitDistance * sinf(orbitPitch),
         orbitDistance * cosf(orbitPitch) * cosf(orbitYaw)};
-    camera.position = Vector3Add(camera.target, offsets);
-    camera.up = worldUp;
+
+    // Only update camera position from orbit if not in auto-center mode
+    if (!autoCenterMode)
+    {
+      camera.position = Vector3Add(camera.target, offsets);
+      camera.up = worldUp;
+    }
 
     const int screenWidth = std::max(GetScreenWidth(), 1);
     const int screenHeight = std::max(GetScreenHeight(), 1);
-    if (screenWidth != prevScreenWidth || screenHeight != prevScreenHeight) {
+    if (screenWidth != prevScreenWidth || screenHeight != prevScreenHeight)
+    {
       UnloadRenderTexture(rtColor);
       UnloadRenderTexture(rtNormalDepth);
       auto resizedTargets = makeRenderTargets();
@@ -1115,12 +1375,14 @@ int main() {
     DrawAxes(2.0f);
 
     rlDisableBackfaceCulling();
-    for (int i = 0; i < model.meshCount; ++i) {
+    for (int i = 0; i < model.meshCount; ++i)
+    {
       DrawMesh(model.meshes[i], outlineMat, model.transform);
     }
     rlEnableBackfaceCulling();
 
-    for (int i = 0; i < model.meshCount; ++i) {
+    for (int i = 0; i < model.meshCount; ++i)
+    {
       DrawMesh(model.meshes[i], toonMat, model.transform);
     }
     EndMode3D();
@@ -1129,7 +1391,8 @@ int main() {
     BeginTextureMode(rtNormalDepth);
     ClearBackground({127, 127, 255, 0});
     BeginMode3D(camera);
-    for (int i = 0; i < model.meshCount; ++i) {
+    for (int i = 0; i < model.meshCount; ++i)
+    {
       DrawMesh(model.meshes[i], normalDepthMat, model.transform);
     }
     EndMode3D();
@@ -1156,7 +1419,8 @@ int main() {
         margin};
     DrawTextEx(brandingFont, kBrandText, brandPos, kBrandFontSize, 0.0f, DARKGRAY);
 
-    if (!statusMessage.empty()) {
+    if (!statusMessage.empty())
+    {
       constexpr float statusFontSize = 18.0f;
       const Vector2 statusPos = {margin, margin};
       DrawTextEx(brandingFont, statusMessage.c_str(), statusPos, statusFontSize, 0.0f, DARKGRAY);
@@ -1169,10 +1433,11 @@ int main() {
   UnloadRenderTexture(rtNormalDepth);
   UnloadMaterial(toonMat);
   UnloadMaterial(normalDepthMat);
-  UnloadMaterial(outlineMat);   // also releases the shader
+  UnloadMaterial(outlineMat); // also releases the shader
   UnloadShader(edgeShader);
   DestroyModel(model);
-  if (brandingFontCustom) {
+  if (brandingFontCustom)
+  {
     UnloadFont(brandingFont);
   }
   JS_FreeRuntime(runtime);
